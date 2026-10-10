@@ -7,6 +7,15 @@ on:
         description: Release tag
         required: true
         type: string
+      package:
+        description: Extra Kconfig package selections, one per line
+        required: false
+        type: string
+      config_only:
+        description: Only generate and upload .config files
+        required: true
+        default: false
+        type: boolean
       prerelease:
         description: Mark as prerelease
         required: true
@@ -31,7 +40,6 @@ jobs:
       matrix:
         target:
           - an7581
-          - an7583
 
     steps:
       - uses: actions/checkout@v6
@@ -61,14 +69,44 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dl
-          key: ponwrt-dl-${{ matrix.target }}-${{ hashFiles('feeds.conf.default', 'configs/*.config') }}
+          key: ponwrt-dl-${{ matrix.target }}-${{ hashFiles('feeds.conf.default', 'configs/*.config', 'custom/**/*.config') }}
           restore-keys: |
             ponwrt-dl-${{ matrix.target }}-
+
+      - name: Cache build tools
+        id: build-cache
+        if: ${{ inputs.config_only != true }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ccache
+            staging_dir/host*
+            staging_dir/tool*
+          key: ponwrt-build-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('feeds.conf.default', 'configs/*.config', 'custom/**/*.config', 'include/**/*.mk', 'toolchain/**/Makefile', 'toolchain/**/*.version', 'tools/**/Makefile') }}
+          restore-keys: |
+            ponwrt-build-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Refresh build cache stamps
+        if: ${{ inputs.config_only != true && steps.build-cache.outputs.cache-hit == 'true' }}
+        run: |
+          if [ -d staging_dir ]; then
+            find staging_dir -type d -name stamp -not -path "*target*" |
+              while IFS= read -r dir; do
+                find "$dir" -type f -exec touch {} +
+              done
+            mkdir -p tmp
+            echo 1 > tmp/.build
+          fi
 
       - name: Install feeds
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+
+      - name: Apply custom package sources and patches
+        run: |
+          custom/scripts/packages.sh
+          custom/scripts/handles.sh
 
       - name: Load repository signing key
         env:
@@ -81,29 +119,44 @@ jobs:
           fi
 
       - name: Configure ${{ matrix.target }}
+        env:
+          CUSTOM_PACKAGE_SELECTIONS: ${{ inputs.package }}
         run: |
-          ./scripts/kconfig.pl + \
+          ./scripts/kconfig.pl + + \
             "configs/${{ matrix.target }}.config" \
-            configs/release.config > .config
+            configs/release.config \
+            custom/config/general.config > .config
+          custom/scripts/settings.sh .config
           make defconfig
 
       - name: Download sources
+        if: ${{ inputs.config_only != true }}
         run: make download -j"$(nproc)"
 
       - name: Build ${{ matrix.target }}
+        if: ${{ inputs.config_only != true }}
         run: make -j"$(nproc)"
 
-      - name: Pack ${{ matrix.target }}
+      - name: Stage release files for ${{ matrix.target }}
+        env:
+          CONFIG_ONLY: ${{ inputs.config_only }}
         run: |
           mkdir release
-          tar --zstd -cf "release/ponwrt-${{ matrix.target }}.tar.zst" \
-            -C bin/targets/airoha "${{ matrix.target }}"
+          cp .config "release/ponwrt-${{ matrix.target }}.config"
+          if [ "$CONFIG_ONLY" != "true" ]; then
+            target_dir="bin/targets/airoha/${{ matrix.target }}"
+            find "$target_dir" -maxdepth 1 -type f -print0 |
+              while IFS= read -r -d '' file; do
+                base="$(basename "$file")"
+                cp "$file" "release/ponwrt-${{ matrix.target }}-$base"
+              done
+          fi
 
       - name: Upload ${{ matrix.target }}
         uses: actions/upload-artifact@v4
         with:
           name: ponwrt-${{ matrix.target }}
-          path: release/*.tar.zst
+          path: release/*
           if-no-files-found: error
           retention-days: 7
 
@@ -124,7 +177,7 @@ jobs:
 
       - name: Create checksums
         working-directory: release
-        run: sha256sum *.tar.zst > sha256sums
+        run: sha256sum * > sha256sums
 
       - name: Create GitHub release
         env:
@@ -134,8 +187,7 @@ jobs:
         run: |
           args=(
             "$RELEASE_TAG"
-            release/*.tar.zst
-            release/sha256sums
+            release/*
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
             --title "PonWrt $RELEASE_TAG"
