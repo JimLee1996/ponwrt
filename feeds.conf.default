@@ -1,10 +1,14 @@
-src-git packages https://github.com/immortalwrt/packages.git
-src-git luci https://github.com/immortalwrt/luci.git
-src-git routing https://github.com/openwrt/routing.git
-src-git telephony https://github.com/openwrt/telephony.git
-src-git video https://github.com/openwrt/video.git
-src-git pon_drivers https://github.com/pbs05/openwrt-pon-drivers.git
-src-git pon_userspace https://github.com/pbs05/openwrt-pon-userspace.git
+# Feeds are pinned to the exact revisions used for the v1.1 release so that
+# upstream drift (e.g. the miniupnpd 2.3.11 bump in immortalwrt/packages)
+# cannot silently break the build. The revisions below come from
+# ponwrt-an7581-feeds.buildinfo of the v1.1 release.
+src-git packages https://github.com/immortalwrt/packages.git^25ad600a90980bed1ee76a212f9a5e42b499bb62
+src-git luci https://github.com/immortalwrt/luci.git^5fc1fac5684cac6eee2c7fbff78c65b867980dd8
+src-git routing https://github.com/openwrt/routing.git^4b9891b9136259f93294a424507ed24c5e8c1cbd
+src-git telephony https://github.com/openwrt/telephony.git^5d68d53c160a325ea9d03fce393e051573bcc736
+src-git video https://github.com/openwrt/video.git^8d4551ceb287527f6a2ba99f9e86ded782a937bb
+src-git pon_drivers https://github.com/pbs05/openwrt-pon-drivers.git^e5194d2dfd169eef8f4a944fdc3f929e0287b680
+src-git pon_userspace https://github.com/pbs05/openwrt-pon-userspace.git^cce9d756742487b378749c606b30e13ee9b0f093
 #src-git targets https://github.com/openwrt/targets.git
 #src-git oldpackages http://git.openwrt.org/packages.git
 #src-link custom /usr/src/openwrt/custom-feed
