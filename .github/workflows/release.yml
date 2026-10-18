@@ -73,30 +73,36 @@ jobs:
           restore-keys: |
             ponwrt-dl-${{ matrix.target }}-
 
-      - name: Cache build tools
+      - name: Cache build state
         id: build-cache
         if: ${{ inputs.config_only != true }}
         uses: actions/cache@v4
         with:
           path: |
             .ccache
-            staging_dir/host*
-            staging_dir/tool*
-          key: ponwrt-build-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('feeds.conf.default', 'configs/*.config', 'custom/**/*.config', 'include/**/*.mk', 'toolchain/**/Makefile', 'toolchain/**/*.version', 'tools/**/Makefile') }}
+            staging_dir
+            build_dir/target-*
+            bin
+          key: ponwrt-build-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('feeds.conf.default', 'configs/*.config', 'custom/**', 'include/**/*.mk', 'toolchain/**/Makefile', 'toolchain/**/*.version', 'tools/**/Makefile') }}
           restore-keys: |
             ponwrt-build-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Refresh build cache stamps
         if: ${{ inputs.config_only != true && steps.build-cache.outputs.cache-hit == 'true' }}
         run: |
-          if [ -d staging_dir ]; then
-            find staging_dir -type d -name stamp -not -path "*target*" |
+          # 还原出的构建树保留了源文件与 stamp 的相对时间关系，但 feeds 是本次新装
+          # 的（mtime 更新），会把 stamp 判成过期。这里把 stamp 统一刷新到最新；真正
+          # 变更过的包靠文件名里带哈希的 .prepared_*/.built_* 触发重新编译。
+          for d in staging_dir build_dir; do
+            [ -d "$d" ] || continue
+            find "$d" -type d -name stamp |
               while IFS= read -r dir; do
                 find "$dir" -type f -exec touch {} +
               done
-            mkdir -p tmp
-            echo 1 > tmp/.build
-          fi
+          done
+          touch staging_dir/target-*/.prepared 2>/dev/null || true
+          mkdir -p tmp
+          echo 1 > tmp/.build
 
       - name: Install feeds
         run: |
@@ -135,7 +141,24 @@ jobs:
 
       - name: Build ${{ matrix.target }}
         if: ${{ inputs.config_only != true }}
-        run: make -j"$(nproc)"
+        run: |
+          make -j"$(nproc)" 2>&1 | tee /tmp/ponwrt-build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+
+          # 默认（非 verbose）模式下每个子 make 的输出都被 verbose.mk 丢进
+          # /dev/null，真正的编译错误不会出现在日志里。这里从汇总行里取出
+          # 失败的包，单独用 V=s -j1 串行重编它，把错误打印出来。
+          pkg=$(sed -n 's/.*ERROR: \([^ ]*\) failed to build.*/\1/p' /tmp/ponwrt-build.log | head -1) || true
+          echo "::error::build failed; re-running '${pkg:-unknown}' with V=s -j1"
+          if [ -n "$pkg" ]; then
+            echo "::group::verbose rebuild of $pkg"
+            make "$pkg/compile" V=s -j1 2>&1 | tail -400 || true
+            echo "::endgroup::"
+          fi
+          exit 1
 
       - name: Stage release files for ${{ matrix.target }}
         env:
