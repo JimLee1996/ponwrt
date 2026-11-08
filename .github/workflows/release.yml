@@ -5,7 +5,7 @@ on:
     inputs:
       tag:
         description: Release tag
-        required: true
+        required: false
         type: string
       package:
         description: Extra Kconfig package selections, one per line
@@ -19,14 +19,14 @@ on:
       prerelease:
         description: Mark as prerelease
         required: true
-        default: true
+        default: false
         type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag }}
+  group: release-${{ inputs.tag || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -189,6 +189,9 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    concurrency:
+      group: ponwrt-release-publish
+      cancel-in-progress: false
 
     steps:
       - name: Download firmware archives
@@ -208,6 +211,9 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
+          if [ -z "$RELEASE_TAG" ]; then
+            RELEASE_TAG="$(TZ=Asia/Shanghai date '+%Y.%m.%d-%H.%M.%S')"
+          fi
           args=(
             "$RELEASE_TAG"
             release/*
@@ -220,3 +226,13 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "${args[@]}"
+
+      - name: Keep the two most recently published releases
+        uses: ophub/delete-releases-workflows@main
+        with:
+          gh_token: ${{secrets.GITHUB_TOKEN}}
+          delete_releases: true
+          releases_keep_latest: 3
+          delete_tags: true
+          delete_workflows: true
+          workflows_keep_day: 3
